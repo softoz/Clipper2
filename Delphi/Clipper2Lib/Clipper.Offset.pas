@@ -2,8 +2,8 @@ unit Clipper.Offset;
 
 (*******************************************************************************
 * Author    :  Angus Johnson                                                   *
-* Version   :  10.0 (beta) - aka Clipper2                                      *
-* Date      :  14 June 2022                                                    *
+* Version   :  Clipper2 - beta                                                 *
+* Date      :  20 June 2022                                                    *
 * Website   :  http://www.angusj.com                                           *
 * Copyright :  Angus Johnson 2010-2022                                         *
 * Purpose   :  Offset paths and clipping solutions                             *
@@ -69,7 +69,9 @@ type
     procedure OffsetOpenPath(endType: TEndType);
   public
     constructor Create(miterLimit: double = 2.0;
-      arcTolerance: double = 0.0; PreserveCollinear: Boolean = False);
+      arcTolerance: double = 0.0;
+      PreserveCollinear: Boolean = False;
+      ReverseSolution: Boolean = False);
     destructor Destroy; override;
     procedure AddPath(const path: TPath64;
       joinType: TJoinType; endType: TEndType);
@@ -182,12 +184,15 @@ end;
 //------------------------------------------------------------------------------
 
 constructor TClipperOffset.Create(miterLimit: double;
-  arcTolerance: double; preserveCollinear: Boolean);
+  arcTolerance: double; PreserveCollinear: Boolean;
+  ReverseSolution: Boolean);
 begin
+  fMergeGroups  := true;
   fMiterLimit   := MiterLimit;
   fArcTolerance := ArcTolerance;
   fInGroups     := TList.Create;
   fPreserveCollinear := preserveCollinear;
+  fReverseSolution := ReverseSolution;
 end;
 //------------------------------------------------------------------------------
 
@@ -237,7 +242,7 @@ end;
 procedure TClipperOffset.DoGroupOffset(pathGroup: TPathGroup; delta: double);
 var
   i, len, lowestIdx: Integer;
-  absDelta, arcTol, area, steps: Double;
+  r, absDelta, arcTol, area, steps: Double;
   IsClosedPaths: Boolean;
 begin
   if pathgroup.endType <> etPolygon then
@@ -246,27 +251,17 @@ begin
   IsClosedPaths := (pathgroup.endType in [etPolygon, etJoined]);
   if IsClosedPaths then
   begin
-    pathgroup.reversed := false;
     //the lowermost polygon must be an outer polygon. So we can use that as the
     //designated orientation for outer polygons (needed for tidy-up clipping)
     lowestIdx := GetLowestPolygonIdx(pathgroup.paths);
     if lowestIdx < 0 then Exit;
-    area := Clipper.Core.Area(pathgroup.paths[lowestIdx]);
+    //nb: don't use the default orientation here ...
+    area := Clipper.Core.Area(pathgroup.paths[lowestIdx], false);
     if area = 0 then Exit;
-
-{$IFDEF REVERSE_ORIENTATION}
-    if area < 0 then
-    begin
-      delta := -delta;
-      pathgroup.reversed := true;
-    end;
-{$ELSE}
-    if area > 0 then
-      delta := -delta
-    else
-      pathgroup.reversed := true;
-{$ENDIF}
-  end;
+    pathgroup.reversed := (area < 0);
+    if pathgroup.reversed then delta := -delta;
+  end else
+    pathgroup.reversed := false;
 
   fDelta := delta;
   absDelta := Abs(fDelta);
@@ -301,16 +296,14 @@ begin
     begin
       if (pathgroup.endType = etRound) then
       begin
-        SetLength(fNorms, 2);
-        fNorms[0] := PointD(1,0);
-        fNorms[1] := PointD(-1,0);
-        DoRound(0, 1, TwoPi);
-        dec(fOutPathLen);
-        SetLength(fOutPath, fOutPathLen);
+        r := absDelta;
+				if (pathGroup.endType = etPolygon) then
+          r := r * 0.5;
+        with fInPath[0] do
+          fOutPath := Path64(Ellipse(RectD(X-r, Y-r, X+r, Y+r)));
       end else
       begin
-        fOutPathLen := 4;
-        SetLength(fOutPath, fOutPathLen);
+        SetLength(fOutPath, 4);
         with fInPath[0] do
         begin
           fOutPath[0] := Point64(X-fDelta,Y-fDelta);
@@ -319,6 +312,8 @@ begin
           fOutPath[3] := Point64(X-fDelta,Y+fDelta);
         end;
       end;
+      AppendPath(fOutPaths, fOutPath);
+      Continue;
     end else
     begin
       BuildNormals;
@@ -341,24 +336,19 @@ begin
   if not fMergeGroups then
   begin
     //clean up self-intersections ...
-    with TClipper64.Create do
+    with TClipper64.Create(false) do
     try
       PreserveCollinear := fPreserveCollinear;
+      //the solution should retain the orientation of the input
+      ReverseSolution := fReverseSolution <> pathGroup.reversed;
       AddSubject(fOutPaths);
-      if pathgroup.reversed then
-      begin
-        ReverseSolution := not fReverseSolution;
-        Execute(ctUnion, frNegative, fOutPaths)
-      end else
-      begin
-        ReverseSolution := fReverseSolution;
+      if pathGroup.reversed then
+        Execute(ctUnion, frNegative, fOutPaths) else
         Execute(ctUnion, frPositive, fOutPaths);
-      end;
     finally
       free;
     end;
   end;
-
   //finally copy the working 'outPaths' to the solution
   AppendPaths(fSolution, fOutPaths);
 end;
@@ -432,11 +422,7 @@ begin
  //cap the end first ...
   case endType of
     etButt: DoButtEnd(highI);
-{$IFDEF REVERSE_ORIENTATION}
     etRound: DoRound(highI, k, PI);
-{$ELSE}
-    etRound: DoRound(highI, k, -PI);
-{$ENDIF}
     else DoSquare(highI, k);
   end;
 
@@ -455,11 +441,7 @@ begin
   //now cap the start ...
   case endType of
     etButt: DoButtStart;
-{$IFDEF REVERSE_ORIENTATION}
     etRound: DoRound(0, 1, PI);
-{$ELSE}
-    etRound: DoRound(0, 1, -PI);
-{$ENDIF}
     else doSquare(0, 1);
   end;
 end;
@@ -500,19 +482,17 @@ begin
   if fMergeGroups and (fInGroups.Count > 0) then
   begin
     //clean up self-intersections ...
-    with TClipper64.Create do
+    with TClipper64.Create(false) do
     try
       PreserveCollinear := fPreserveCollinear;
+      //the solution should retain the orientation of the input
+
+      ReverseSolution :=
+        fReverseSolution <> TPathGroup(fInGroups[0]).reversed;
       AddSubject(fSolution);
       if TPathGroup(fInGroups[0]).reversed then
-      begin
-        ReverseSolution := not fReverseSolution;
-        Execute(ctUnion, frNegative, fSolution)
-      end else
-      begin
-        ReverseSolution := fReverseSolution;
+        Execute(ctUnion, frNegative, fSolution) else
         Execute(ctUnion, frPositive, fSolution);
-      end;
     finally
       free;
     end;
@@ -583,7 +563,7 @@ end;
 procedure TClipperOffset.DoRound(j, k: Integer; angle: double);
 var
   i, steps: Integer;
-  stepSin, stepCos: Extended;
+  stepSin, stepCos: double;
   pt: TPoint64;
   pt2: TPointD;
 begin
@@ -593,7 +573,7 @@ begin
   AddPoint(pt.X + pt2.X, pt.Y + pt2.Y);
 
   steps := Round(fStepsPerRad * abs(angle) + 0.501);
-  Math.SinCos(angle / steps, stepSin, stepCos);
+  GetSinCos(angle / steps, stepSin, stepCos);
   for i := 0 to steps -1 do
   begin
     pt2 := PointD(pt2.X * stepCos - stepSin * pt2.Y,

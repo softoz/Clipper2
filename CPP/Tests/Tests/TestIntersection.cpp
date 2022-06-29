@@ -1,36 +1,30 @@
 #include <gtest/gtest.h>
 #include "../../Clipper2Lib/clipper.h"
 
-TEST(Clipper2Tests, TestBasicIntersection) {
-    Clipper2Lib::Clipper clipper;
+using namespace Clipper2Lib;
 
-    const Clipper2Lib::Path64 a = {
-        Clipper2Lib::Point64(0, 0),
-        Clipper2Lib::Point64(0, 5),
-        Clipper2Lib::Point64(5, 5),
-        Clipper2Lib::Point64(5, 0)
-    };
+TEST(Clipper2Tests, TestIntersectionUsingPolyTree) 
+{
+    Clipper clipper;
 
-    const Clipper2Lib::Path64 b = {
-        Clipper2Lib::Point64(1, 1),
-        Clipper2Lib::Point64(1, 6),
-        Clipper2Lib::Point64(6, 6),
-        Clipper2Lib::Point64(6, 1)
-    };
+    Paths64 subject; 
+    subject.push_back( MakePath("0,0  0,5  5,5  5,0") );
+    clipper.AddSubject(subject);
+    Paths64 clip;
+    clip.push_back( MakePath("1,1  1,6  6,6  6,1") );
+    clipper.AddClip (clip);
 
-    clipper.AddSubject({ a });
-    clipper.AddClip   ({ b });
+    PolyTree64 solution;
+    Paths64 open_paths;
 
-    Clipper2Lib::PolyTree64 solution;
-    Clipper2Lib::Paths64 open_paths;
-
-#ifdef REVERSE_ORIENTATION
-    clipper.Execute(Clipper2Lib::ClipType::Intersection, Clipper2Lib::FillRule::Negative, solution, open_paths);
-#else 
-    clipper.Execute(Clipper2Lib::ClipType::Intersection, Clipper2Lib::FillRule::Positive, solution, open_paths);
-#endif 
+    if (IsPositive(subject[0]))
+      clipper.Execute(ClipType::Intersection,
+        FillRule::Positive, solution, open_paths);
+    else
+      clipper.Execute(ClipType::Intersection,
+        FillRule::Negative, solution, open_paths);
 
     EXPECT_EQ(open_paths.size(), 0);
     ASSERT_EQ(solution.ChildCount(), 1);
-    EXPECT_EQ(solution.childs.front()->polygon.size(), 4);
+    EXPECT_EQ(solution[0]->polygon().size(), 4);
 }

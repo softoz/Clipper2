@@ -1,7 +1,7 @@
 /*******************************************************************************
 * Author    :  Angus Johnson                                                   *
-* Version   :  10.0 (beta) - aka Clipper2                                      *
-* Date      :  14 June 2022                                                    *
+* Version   :  Clipper2 - beta                                                 *
+* Date      :  26 June 2022                                                    *
 * Website   :  http://www.angusj.com                                           *
 * Copyright :  Angus Johnson 2010-2022                                         *
 * Purpose   :  This is the main polygon clipping module                        *
@@ -18,17 +18,7 @@
 
 namespace Clipper2Lib {
 
-	static const double DefaultScale = 100;
 	static const double FloatingPointTolerance = 1.0e-12;
-
-#ifdef REVERSE_ORIENTATION
-	static const FillRule fill_pos = FillRule::Negative; 
-	static const FillRule fill_neg = FillRule::Positive;
-#else 
-	static const FillRule fill_pos = FillRule::Positive;
-	static const FillRule fill_neg = FillRule::Negative;
-#endif 
-
 
 	//Every closed path (or polygon) is made up of a series of vertices forming
 	//edges that alternate between going up (relative to the Y-axis) and going
@@ -487,7 +477,7 @@ namespace Clipper2Lib {
 	}
 
 
-	double Area(OutPt* op)
+	double Area(OutPt* op, bool orientation_is_reversed)
 	{
 		//https://en.wikipedia.org/wiki/Shoelace_formula
 		double area = 0.0;
@@ -498,24 +488,23 @@ namespace Clipper2Lib {
 				static_cast<double>(op2->prev->pt.x - op2->pt.x);
 			op2 = op2->next;
 		} while (op2 != op);
-#ifdef REVERSE_ORIENTATION		
-		return area * 0.5;
-#else 
-		return area * -0.5;
-#endif 
+		if (orientation_is_reversed)
+			return area * 0.5;
+		else
+			return area * -0.5;
 	}
 
-	inline double AreaTriangle(const Point64& pt1, const Point64& pt2, const Point64& pt3)
+	inline double AreaTriangle(const Point64& pt1, 
+		const Point64& pt2, const Point64& pt3, bool orientation_is_reversed)
 	{
-#ifdef REVERSE_ORIENTATION		
-		return static_cast<double>(pt3.y + pt1.y) * static_cast<double>(pt3.x - pt1.x) +
-			static_cast<double>(pt1.y + pt2.y) * static_cast<double>(pt1.x - pt2.x) +
-			static_cast<double>(pt2.y + pt3.y) * static_cast<double>(pt2.x - pt3.x);
-#else 
-		return -(static_cast<double>(pt3.y + pt1.y) * static_cast<double>(pt3.x - pt1.x) +
-			static_cast<double>(pt1.y + pt2.y) * static_cast<double>(pt1.x - pt2.x) +
-			static_cast<double>(pt2.y + pt3.y) * static_cast<double>(pt2.x - pt3.x));
-#endif 
+		if (orientation_is_reversed)
+			return static_cast<double>(pt3.y + pt1.y) * static_cast<double>(pt3.x - pt1.x) +
+				static_cast<double>(pt1.y + pt2.y) * static_cast<double>(pt1.x - pt2.x) +
+				static_cast<double>(pt2.y + pt3.y) * static_cast<double>(pt2.x - pt3.x);
+		else
+			return -(static_cast<double>(pt3.y + pt1.y) * static_cast<double>(pt3.x - pt1.x) +
+				static_cast<double>(pt1.y + pt2.y) * static_cast<double>(pt1.x - pt2.x) +
+				static_cast<double>(pt2.y + pt3.y) * static_cast<double>(pt2.x - pt3.x));
 	}
 
 	void ReverseOutPts(OutPt* op)
@@ -562,13 +551,23 @@ namespace Clipper2Lib {
 	}
 
 
-	inline bool IsValidClosedPath(const OutPt* op)
+	inline bool AreReallyClose(const Point64& pt1, const Point64& pt2)
 	{
-		return (op && op->next != op && op->next != op->prev);
+	  return (std::abs(pt1.x - pt2.x) < 2) && (std::abs(pt1.y - pt2.y) < 2);
 	}
 
 
-	bool CheckFixInnerOuter(Active& ae)
+	inline bool IsValidClosedPath(const OutPt* op)
+	{
+		return (op && op->next != op && op->next != op->prev &&
+			//also treat inconsequential polygons as invalid
+			(op->next->next != op->prev ||
+			!(AreReallyClose(op->pt, op->next->pt) &&
+			AreReallyClose(op->pt, op->prev->pt))));
+	}
+
+
+	bool CheckFixInnerOuter(Active& ae, bool orientation_is_reversed)
 	{
 		bool wasOuter = IsOuter(*ae.outrec), isOuter = true;
 
@@ -605,7 +604,7 @@ namespace Clipper2Lib {
 				ae.outrec->owner = ae2->outrec;
 		}
 
-		if ((Area(ae.outrec->pts) < 0.0) == isOuter)
+		if ((Area(ae.outrec->pts, orientation_is_reversed) < 0.0) == isOuter)
 			ReverseOutPts(ae.outrec->pts);
 		return true;
 	}
@@ -901,17 +900,20 @@ namespace Clipper2Lib {
 	{
 		switch (fillrule_)
 		{
+		case FillRule::EvenOdd:
+			break; 
 		case FillRule::NonZero:
 			if (abs(e.wind_cnt) != 1) return false;
 			break;
-		case fill_pos:
-			if (e.wind_cnt != -1) return false;
-			break;
-		case fill_neg:
-			if (e.wind_cnt != 1) return false;
-			break;
-		case FillRule::EvenOdd:
-			break;
+		default:
+		{
+			if (fillrule_ == fillpos)
+			{
+				if (e.wind_cnt != 1) return false;
+			}
+			else /*(fillrule_ == fillneg)*/ 
+				if (e.wind_cnt != -1) return false;
+		}
 		}
 
 		switch (cliptype_)
@@ -920,40 +922,60 @@ namespace Clipper2Lib {
 			switch (fillrule_)
 			{
 			case FillRule::EvenOdd:
-			case FillRule::NonZero: return (e.wind_cnt2 != 0);
-			case fill_pos: return (e.wind_cnt2 < 0);
-			case fill_neg: return (e.wind_cnt2 > 0);
+			case FillRule::NonZero: 
+				return (e.wind_cnt2 != 0);
+			default:
+				if (fillrule_ == fillpos) 
+					return (e.wind_cnt2 > 0);
+				else 
+					return (e.wind_cnt2 < 0);
 			}
 			break;
+
 		case ClipType::Union:
 			switch (fillrule_)
 			{
 			case FillRule::EvenOdd:
-			case FillRule::NonZero: return (e.wind_cnt2 == 0);
-			case fill_pos: return (e.wind_cnt2 <= 0);
-			case fill_neg: return (e.wind_cnt2 >= 0);
+			case FillRule::NonZero: 
+				return (e.wind_cnt2 == 0);
+			default:
+				if (fillrule_ == fillpos)
+					return (e.wind_cnt2 <= 0);
+				else
+					return (e.wind_cnt2 >= 0);
 			}
 			break;
+
 		case ClipType::Difference:
 			if (GetPolyType(e) == PathType::Subject)
 				switch (fillrule_)
 				{
 				case FillRule::EvenOdd:
-				case FillRule::NonZero: return (e.wind_cnt2 == 0);
-				case fill_pos: return (e.wind_cnt2 >= 0);
-				case fill_neg: return (e.wind_cnt2 <= 0);
+				case FillRule::NonZero: 
+					return (e.wind_cnt2 == 0);
+				default:
+					if (fillrule_ == fillpos)
+						return (e.wind_cnt2 <= 0);
+					else
+						return (e.wind_cnt2 >= 0);
 				}
 			else
 				switch (fillrule_)
 				{
 				case FillRule::EvenOdd:
-				case FillRule::NonZero: return (e.wind_cnt2 != 0);
-				case fill_pos: return (e.wind_cnt2 < 0);
-				case fill_neg: return (e.wind_cnt2 > 0);
+				case FillRule::NonZero: 
+					return (e.wind_cnt2 != 0);
+				default:
+					if (fillrule_ == fillpos)
+						return (e.wind_cnt2 > 0);
+					else
+						return (e.wind_cnt2 < 0);
 				}
 			break;
+
 		case ClipType::Xor:
 			return true;  //XOr is always contributing unless open
+
 		default:
 			return false;
 		}
@@ -1392,10 +1414,10 @@ namespace Clipper2Lib {
 	{
 		if (ValidateClosedPathEx(e.outrec) && ValidateClosedPathEx(e2.outrec))
 		{
-			if (CheckFixInnerOuter(e) &&
+			if (CheckFixInnerOuter(e, orientation_is_reversed_) &&
 				IsOuter(*e.outrec) == IsFront(e))
 				SwapSides(*e.outrec);
-			else if (CheckFixInnerOuter(e2) &&
+			else if (CheckFixInnerOuter(e2, orientation_is_reversed_) &&
 				IsOuter(*e2.outrec) == IsFront(e2))
 				SwapSides(*e2.outrec);
 			else
@@ -1420,7 +1442,12 @@ namespace Clipper2Lib {
 		if (IsFront(e1) == IsFront(e2))
 		{
 			if (IsOpen(e1))
-				SwapSides(*e2.outrec);
+			{
+				if(e1.wind_dx < 0)
+					SwapSides(*e2.outrec);
+				else
+					SwapSides(*e1.outrec);
+			}
 			else if (!FixSides(e1, e2))
 			{
 				succeeded_ = false;
@@ -1439,6 +1466,13 @@ namespace Clipper2Lib {
 			result = outrec.pts;
 		}
 		//and to preserve the winding orientation of outrec ...
+		else if (IsOpen(e1))
+		{
+			if (e1.wind_dx < 0)
+				JoinOutrecPaths(e1, e2);
+			else
+				JoinOutrecPaths(e2, e1);
+		}
 		else if (e1.outrec->idx < e2.outrec->idx)
 			JoinOutrecPaths(e1, e2);
 		else
@@ -1595,8 +1629,9 @@ namespace Clipper2Lib {
 		if (zfill_func_)
 			zfill_func_(prevOp->pt, splitOp->pt, splitOp->next->pt, nextNextOp->pt, ip);
 #endif
-		double area1 = Area(outRecOp);
-		double area2 = AreaTriangle(ip, splitOp->pt, splitOp->next->pt);
+		double area1 = Area(outRecOp, orientation_is_reversed_);
+		double area2 = AreaTriangle(ip, 
+			splitOp->pt, splitOp->next->pt, orientation_is_reversed_);
 
 		if (ip == prevOp->pt || ip == nextNextOp->pt)
 		{
@@ -1703,8 +1738,8 @@ namespace Clipper2Lib {
 
 	void ClipperBase::CompleteSplit(OutPt* op1, OutPt* op2, OutRec& outrec)
 	{
-		double area1 = Area(op1);
-		double area2 = Area(op2);
+		double area1 = Area(op1, orientation_is_reversed_);
+		double area2 = Area(op2, orientation_is_reversed_);
 		if (std::abs(area1) < 1)
 		{
 			SafeDisposeOutPts(op1);
@@ -1768,8 +1803,18 @@ namespace Clipper2Lib {
 		outrec->state = OutRecState::Open;
 		outrec->pts = nullptr;
 		outrec->polypath = nullptr;
-		outrec->back_edge = nullptr;
-		outrec->front_edge = nullptr;
+
+		if (e.wind_dx > 0)
+		{
+			outrec->front_edge = &e;
+			outrec->back_edge = nullptr;
+		}
+		else
+		{
+			outrec->front_edge = nullptr;
+			outrec->back_edge =& e;
+		}
+
 		e.outrec = outrec;
 
 		OutPt* op = new OutPt(pt, outrec);
@@ -1804,6 +1849,7 @@ namespace Clipper2Lib {
 		if (has_open_paths_ && (IsOpen(e1) || IsOpen(e2)))
 		{
 			if (IsOpen(e1) && IsOpen(e2)) return nullptr;
+
 			Active* edge_o, * edge_c;
 			if (IsOpen(e1))
 			{
@@ -1816,23 +1862,14 @@ namespace Clipper2Lib {
 				edge_c = &e1;
 			}
 
-			switch (cliptype_)
+			if (abs(edge_c->wind_cnt) != 1) return nullptr;
+
+			if (cliptype_ == ClipType::Union)
 			{
-			case ClipType::Intersection:
-			case ClipType::Difference:
-				if (IsSamePolyType(*edge_o, *edge_c) || (abs(edge_c->wind_cnt) != 1)) return nullptr;
-				break;
-			case ClipType::Union:
-				if (IsHotEdge(*edge_o) != ((abs(edge_c->wind_cnt) != 1) ||
-					(IsHotEdge(*edge_o) != (edge_c->wind_cnt != 0)))) return nullptr;
-				break;
-			case ClipType::Xor:
-				if (abs(edge_c->wind_cnt) != 1) return nullptr;
-				break;
-			case ClipType::None:
-				succeeded_ = false;
-				break;
+				if (std::abs(e2.wind_cnt) != 1 || e2.wind_cnt2 != 0) return nullptr;
 			}
+			else if (IsSamePolyType(e1, e2) || (std::abs(e2.wind_cnt) != 1)) return nullptr;
+
 			//toggle contribution ...
 			if (IsHotEdge(*edge_o))
 			{
@@ -1849,6 +1886,9 @@ namespace Clipper2Lib {
 			return resultOp;
 		}
 
+
+		//MANAGING CLOSED PATHS FROM HERE ON
+		
 		//UPDATE WINDING COUNTS...
 
 		int old_e1_windcnt, old_e2_windcnt;
@@ -1888,17 +1928,22 @@ namespace Clipper2Lib {
 
 		switch (fillrule_)
 		{
-		case fill_pos:
-			old_e1_windcnt = -e1.wind_cnt;
-			old_e2_windcnt = -e2.wind_cnt;
-			break;
-		case fill_neg:
-			old_e1_windcnt = e1.wind_cnt;
-			old_e2_windcnt = e2.wind_cnt;
-			break;
-		default:
+		case FillRule::EvenOdd:
+		case FillRule::NonZero:
 			old_e1_windcnt = abs(e1.wind_cnt);
 			old_e2_windcnt = abs(e2.wind_cnt);
+			break;
+		default:
+			if (fillrule_ == fillpos)
+			{
+				old_e1_windcnt = e1.wind_cnt;
+				old_e2_windcnt = e2.wind_cnt;
+			}
+			else
+			{
+				old_e1_windcnt = -e1.wind_cnt;
+				old_e2_windcnt = -e2.wind_cnt;
+			}
 			break;
 		}
 
@@ -1972,17 +2017,22 @@ namespace Clipper2Lib {
 			int64_t e1Wc2, e2Wc2;
 			switch (fillrule_)
 			{
-			case fill_pos:
-				e1Wc2 = -e1.wind_cnt2;
-				e2Wc2 = -e2.wind_cnt2;
-				break;
-			case fill_neg:
-				e1Wc2 = e1.wind_cnt2;
-				e2Wc2 = e2.wind_cnt2;
-				break;
-			default:
+			case FillRule::EvenOdd:
+			case FillRule::NonZero:
 				e1Wc2 = abs(e1.wind_cnt2);
 				e2Wc2 = abs(e2.wind_cnt2);
+				break;
+			default:
+				if (fillrule_ == fillpos)
+				{
+					e1Wc2 = e1.wind_cnt2;
+					e2Wc2 = e2.wind_cnt2;
+				}
+				else
+				{
+					e1Wc2 = -e1.wind_cnt2;
+					e2Wc2 = -e2.wind_cnt2;
+				}
 				break;
 			}
 
@@ -2478,7 +2528,15 @@ namespace Clipper2Lib {
 			//check if we've finished with (consecutive) horizontals ...
 			if (horzIsOpen && IsOpenEnd(horz)) //ie open at top
 			{
-				if (IsHotEdge(horz))  AddOutPt(horz, horz.top);
+				if (IsHotEdge(horz))
+				{
+					AddOutPt(horz, horz.top);
+					if (IsFront(horz))
+						horz.outrec->front_edge = nullptr; 
+					else
+						horz.outrec->back_edge = nullptr;
+					horz.outrec = nullptr;
+				}
 				DeleteFromAEL(horz); 
 				return;
 			}
@@ -2575,7 +2633,14 @@ namespace Clipper2Lib {
 			if (IsHotEdge(e)) AddOutPt(e, e.top);
 			if (!IsHorizontal(e))
 			{
-				if (IsHotEdge(e)) e.outrec = nullptr;
+				if (IsHotEdge(e))
+				{
+					if (IsFront(e))
+						e.outrec->front_edge = nullptr;
+					else
+						e.outrec->back_edge = nullptr;
+					e.outrec = nullptr;
+				}
 				DeleteFromAEL(e);
 			}
 			return next_e;
@@ -3335,7 +3400,9 @@ namespace Clipper2Lib {
 			else
 			{
 				Path64 path;
-				if (BuildPath(outrec->pts, ReverseSolution, false, path))
+				//closed paths should always return a Positive orientation
+				if (BuildPath(outrec->pts, 
+					ReverseSolution != orientation_is_reversed_, false, path))
 					solutionClosed.emplace_back(std::move(path));
 				path.resize(0);
 			}
@@ -3348,53 +3415,61 @@ namespace Clipper2Lib {
 			return PointInPolyResult::IsOutside;
 		
 		int val = 0;
-		OutPt* prev = ops->prev, *curr = ops;
+		OutPt *curr = ops, *prev = curr->prev;
+		
+		prev->next = nullptr; //temporary!!!
+		bool is_above = prev->pt.y < pt.y;
 		do
 		{
-			if (prev->pt.y == curr->pt.y) //a horizontal edge
+			if (is_above)
 			{
-				if (pt.y == curr->pt.y &&
-					(pt.x == prev->pt.x || pt.x == curr->pt.x ||
-					(pt.x < prev->pt.x) != (pt.x < curr->pt.x)))
-						return PointInPolyResult::IsOn;
-			}
-			else if (prev->pt.y < curr->pt.y)
-			{
-				//nb: only allow one equality with Y to avoid 
-				//double counting when pt.Y == ptCurr.Pt.Y
-				if (pt.y > prev->pt.y && pt.y <= curr->pt.y &&
-					((pt.x >= prev->pt.x || pt.x >= curr->pt.x)))
-				{
-					if (pt.x > prev->pt.x && pt.x > curr->pt.x)
-						val = 1 - val; //toggles val between 0 and 1
-					else
-					{
-						double d = CrossProduct(prev->pt, curr->pt, pt);
-						if (d == 0) return PointInPolyResult::IsOn;
-						else if (d > 0) val = 1 - val;
-					}
-				}
+				while (curr && curr->pt.y < pt.y) curr = curr->next;
+				if (!curr) break;
 			}
 			else
 			{
-				if (pt.y > curr->pt.y && pt.y <= prev->pt.y &&
-					(pt.x >= curr->pt.x || pt.x >= prev->pt.x))
-				{
-					if (pt.x > prev->pt.x && pt.x > curr->pt.x)
-						val = 1 - val; //toggles val between 0 and 1
-					else
-					{
-						double d = CrossProduct(curr->pt, prev->pt, pt);
-						if (d == 0) return PointInPolyResult::IsOn;
-						else if (d > 0) val = 1 - val;
-					}
-				}
+				while (curr && curr->pt.y > pt.y) curr = curr->next;
+				if (!curr) break;
 			}
-			prev = curr;
-			curr = curr->next;
-		} while (curr != ops);
+			prev = curr->prev;
 
-		return val == 0 ? PointInPolyResult::IsOutside : PointInPolyResult::IsInside;
+			if (curr->pt.y == pt.y)
+			{
+				if (curr->pt.x == pt.x || (curr->pt.y == prev->pt.y &&
+					((pt.x < prev->pt.x) != (pt.x < curr->pt.x))))
+				{
+					ops->prev->next = ops; //reestablish the link
+					return PointInPolyResult::IsOn;
+				}
+				curr = curr->next;
+				continue;
+			}
+
+			if (pt.x < curr->pt.x && pt.x < prev->pt.x)
+			{
+				//we're only interested in edges crossing on the left
+			}
+			else if (pt.x > prev->pt.x && pt.x > curr->pt.x)
+				val = 1 - val; //toggle val
+			else
+			{
+				double d = CrossProduct(prev->pt, curr->pt, pt);
+				if (d == 0)
+				{
+					ops->prev->next = ops; //reestablish the link
+					return PointInPolyResult::IsOn;
+				}
+				if ((d < 0) == is_above) val = 1 - val;
+			}
+			is_above = !is_above;
+			curr = curr->next;
+
+		} while (curr);
+
+		ops->prev->next = ops; //reestablish the link
+		return val == 0 ? 
+			PointInPolyResult::IsOutside : 
+			PointInPolyResult::IsInside;
 	}
 
 	bool Path1InsidePath2(OutPt* op1, OutPt* op2)
@@ -3434,8 +3509,9 @@ namespace Clipper2Lib {
 						}
 				}
 
-				//swap order if outer/owner paths are preceeded by their inner paths
-				if (outrec->owner->idx > outrec->idx)
+				//swap the order when a child preceeds its owner
+				//(because owners must preceed children in polytrees)
+				if (outrec->idx < outrec->owner->idx)
 				{
 					OutRec* tmp = outrec->owner;
 					outrec_list_[outrec->owner->idx] = outrec;
@@ -3456,8 +3532,10 @@ namespace Clipper2Lib {
 			}
 
 			Path64 path;
-			if (!BuildPath(outrec->pts, 
-				ReverseSolution, false, path)) continue;
+			//closed paths will return a Positive orientation unless
+			//ReverseSolution or orientation_is_reversed_ are true
+			if (!BuildPath(outrec->pts,
+				ReverseSolution != orientation_is_reversed_, false, path)) continue;
 
 			if (outrec->owner && outrec->owner->state == outrec->state)
 				outrec->owner = outrec->owner->owner;
@@ -3474,9 +3552,9 @@ namespace Clipper2Lib {
 
 	static void PolyPath64ToPolyPathD(const PolyPath64& polypath, PolyPathD& result)
 	{
-		for (const PolyPath64* child : polypath.childs)
+		for (const PolyPath64* child : polypath.childs())
 		{
-			PolyPathD* res_child = result.AddChild(Path64ToPathD(child->polygon));
+			PolyPathD* res_child = result.AddChild(Path64ToPathD(child->polygon()));
 			PolyPath64ToPolyPathD(*child, *res_child);
 		}
 	}

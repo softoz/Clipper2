@@ -1,7 +1,7 @@
 /*******************************************************************************
 * Author    :  Angus Johnson                                                   *
-* Version   :  10.0 (beta) - aka Clipper2                                      *
-* Date      :  14 June 2022                                                    *
+* Version   :  Clipper2 - beta                                                 *
+* Date      :  26 June 2022                                                    *
 * Website   :  http://www.angusj.com                                           *
 * Copyright :  Angus Johnson 2010-2022                                         *
 * Purpose   :  This is the main polygon clipping module                        *
@@ -166,10 +166,12 @@ namespace Clipper2Lib {
 	private:
 		ClipType cliptype_ = ClipType::None;
 		FillRule fillrule_ = FillRule::EvenOdd;
+		FillRule fillpos = FillRule::Positive;
 		int64_t bot_y_ = 0;
 		bool has_open_paths_ = false;
 		bool minima_list_sorted_ = false;
 		bool using_polytree_ = false;
+		bool succeeded_ = true;
 		Active *actives_ = nullptr;
 		Active *sel_ = nullptr;
 		Joiner *horz_joiners_ = nullptr;
@@ -245,28 +247,39 @@ namespace Clipper2Lib {
 		void SetZ(const Active& e1, const Active& e2, Point64& pt);
 #endif
 	protected:
-		bool succeeded_ = true;
+		bool orientation_is_reversed_ = true;
 		void CleanUp();  //unlike Clear, CleanUp preserves added paths
 		void AddPath(const Path64& path, PathType polytype, bool is_open);
 		void AddPaths(const Paths64& paths, PathType polytype, bool is_open);
 
-		virtual bool Execute(ClipType clip_type,
+		bool Execute(ClipType clip_type,
 			FillRule fill_rule, Paths64& solution_closed);
-		virtual bool Execute(ClipType clip_type,
+		bool Execute(ClipType clip_type,
 			FillRule fill_rule, Paths64& solution_closed, Paths64& solution_open);
-		virtual bool Execute(ClipType clip_type,
+		bool Execute(ClipType clip_type,
 			FillRule fill_rule, PolyTree64& polytree, Paths64& open_paths);
 	public:
+#ifdef USINGZ
+		void ZFillFunction(ZFillCallback zFillFunc) { zfill_func_ = zFillFunc; }
+		ClipperBase(bool use_reverse_orientation = DEFAULT_ORIENTATION_REVERSED)
+		{ 
+			ReverseSolution = use_reverse_orientation;
+			if (use_reverse_orientation)
+				fillpos = FillRule::Negative;
+			zfill_func_ = nullptr;
+		};
+#else
+		explicit ClipperBase(bool orientation_is_reversed = DEFAULT_ORIENTATION_IS_REVERSED)
+		{
+			orientation_is_reversed_ = orientation_is_reversed;
+			if (orientation_is_reversed_)
+				fillpos = FillRule::Negative;
+		}
+#endif
 		virtual ~ClipperBase();
 		bool PreserveCollinear = true;
 		bool ReverseSolution = false;
 		void Clear();
-#ifdef USINGZ
-		ClipperBase() { zfill_func_ = nullptr; };
-		void ZFillFunction(ZFillCallback zFillFunc);
-#else
-		ClipperBase() {};
-#endif
 	};
 
 	// PolyPath / PolyTree --------------------------------------------------------
@@ -280,14 +293,14 @@ namespace Clipper2Lib {
 	class PolyPath {
 	private:
 		double scale_;
+		Path<T> polygon_;
+		std::vector<PolyPath*> childs_;
 	protected:
 		const PolyPath<T>* parent_;
 		PolyPath(const PolyPath<T>* parent, 
 			const Path<T>& path) : 
-			scale_(parent->scale_), parent_(parent), polygon(path) {}
+			scale_(parent->scale_), polygon_(path), parent_(parent){}
 	public:
-		Path<T> polygon;
-		std::vector<PolyPath*> childs;
 
 		explicit PolyPath(int precision = 0) //NB only for root node
 		{  
@@ -302,24 +315,24 @@ namespace Clipper2Lib {
 		PolyPath& operator=(const PolyPath&) = delete;
 
 		void Clear() { 
-			for (PolyPath<T>* child : childs) delete child;
-			childs.resize(0); 
+			for (PolyPath<T>* child : childs_) delete child;
+			childs_.resize(0); 
 		}
 
 		void reserve(size_t size)
 		{
-			if (size > childs.size()) childs.reserve(size);
+			if (size > childs_.size()) childs_.reserve(size);
 		}
 
 		PolyPath<T>* AddChild(const Path<T>& path)
 		{
-			childs.push_back(new PolyPath<T>(this, path));
-			return childs.back();
+			childs_.push_back(new PolyPath<T>(this, path));
+			return childs_.back();
 		}
 
-		size_t ChildCount() const { return childs.size(); }
+		size_t ChildCount() const { return childs_.size(); }
 
-		const PolyPath<T>* operator [] (size_t index) const { return childs[index]; }
+		const PolyPath<T>* operator [] (size_t index) const { return childs_[index]; }
 
 		const PolyPath<T>* parent() const { return parent_; }
 
@@ -333,21 +346,28 @@ namespace Clipper2Lib {
 			return is_hole;
 		}
 
+		const Path<T>& polygon() const { return polygon_; }
+
+		const std::vector<PolyPath*>& childs() const { return childs_; }
+
 		double Area() const
 		{
-			double result = Clipper2Lib::Area<T>(polygon);
-			for (PolyPath<T> child : childs)
-				result += child.Area();
+			double result = Clipper2Lib::Area<T>(polygon_);
+			for (const PolyPath<T>* child : childs_)
+				result += child->Area();
 			return result;
 		}
 
 	};
+
 
 	void Polytree64ToPolytreeD(const PolyPath64& polytree, PolyPathD& result);
 
 	class Clipper64 : public ClipperBase
 	{
 	public:
+		using ClipperBase::ClipperBase;
+		
 		void AddSubject(const Paths64& subjects)
 		{
 			AddPaths(subjects, PathType::Subject, false);
@@ -362,19 +382,19 @@ namespace Clipper2Lib {
 		}
 
 		bool Execute(ClipType clip_type,
-			FillRule fill_rule, Paths64& closed_paths) override
+			FillRule fill_rule, Paths64& closed_paths)
 		{
 			return ClipperBase::Execute(clip_type, fill_rule, closed_paths);
 		}
 
 		bool Execute(ClipType clip_type,
-			FillRule fill_rule, Paths64& closed_paths, Paths64& open_paths) override
+			FillRule fill_rule, Paths64& closed_paths, Paths64& open_paths)
 		{
 			return ClipperBase::Execute(clip_type, fill_rule, closed_paths, open_paths);
 		}
 
 		bool Execute(ClipType clip_type,
-			FillRule fill_rule, PolyTree64& polytree, Paths64& open_paths) override
+			FillRule fill_rule, PolyTree64& polytree, Paths64& open_paths)
 		{
 			return ClipperBase::Execute(clip_type, fill_rule, polytree, open_paths);
 		}
@@ -385,7 +405,9 @@ namespace Clipper2Lib {
 	private:
 		const double scale_;
 	public:
-		explicit ClipperD(int precision = 0) : scale_(std::pow(10, precision)) {}
+		explicit ClipperD(int precision = 0,
+      bool use_reverse_orientation = DEFAULT_ORIENTATION_IS_REVERSED) : 
+      ClipperBase(use_reverse_orientation), scale_(std::pow(10, precision)) {}
 
 		void AddSubject(const PathsD& subjects)
 		{

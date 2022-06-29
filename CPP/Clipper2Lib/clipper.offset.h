@@ -1,7 +1,7 @@
 /*******************************************************************************
 * Author    :  Angus Johnson                                                   *
-* Version   :  10.0 (beta) - aka Clipper2                                      *
-* Date      :  14 June 2022                                                    *
+* Version   :  Clipper2 - beta                                                 *
+* Date      :  20 June 2022                                                    *
 * Website   :  http://www.angusj.com                                           *
 * Copyright :  Angus Johnson 2010-2022                                         *
 * Purpose   :  Polygon offsetting                                              *
@@ -29,11 +29,11 @@ public:
 	Paths64 paths_in_;
 	Paths64 paths_out_;
 	Path64 path_;
-	bool is_reversed = false;
-	JoinType join_type;
-	EndType end_type;
+	bool is_reversed_ = false;
+	JoinType join_type_;
+	EndType end_type_;
 	PathGroup(const Paths64& paths, JoinType join_type, EndType end_type):
-		paths_in_(paths), join_type(join_type), end_type(end_type) {}
+		paths_in_(paths), join_type_(join_type), end_type_(end_type) {}
 };
 
 class ClipperOffset {
@@ -42,6 +42,7 @@ private:
 	double temp_lim_ = 0.0;
 	double steps_per_rad_ = 0.0;
 	PathD norms;
+	Paths64 solution;
 	std::vector<PathGroup> groups_;
 	JoinType join_type_ = JoinType::Square;
 	
@@ -61,9 +62,10 @@ private:
 	void OffsetPoint(PathGroup& group, Path64& path, size_t j, size_t& k);
 	void DoGroupOffset(PathGroup &group, double delta);
 public:
-	ClipperOffset(double miter_limit = 2.0, 
-		double arc_tolerance = 0.0, int precision = 2, 
-		bool preserve_collinear = false, bool reverse_solution = false) :
+	ClipperOffset(double miter_limit = 2.0,
+		double arc_tolerance = 0.0,
+		bool preserve_collinear = false, 
+		bool reverse_solution = false) :
 		miter_limit_(miter_limit), arc_tolerance_(arc_tolerance),
 		preserve_collinear_(preserve_collinear),
 		reverse_solution_(reverse_solution) { };
@@ -94,15 +96,10 @@ public:
 	void MergeGroups(bool merge_groups) { merge_groups_ = merge_groups; }
 
 	bool PreserveCollinear() const { return preserve_collinear_; }
-	void PreserveCollinear(bool preserve_collinear)
-	{
-		preserve_collinear_ = preserve_collinear;
-	}
+	void PreserveCollinear(bool preserve_collinear){preserve_collinear_ = preserve_collinear;}
+	
 	bool ReverseSolution() const { return reverse_solution_; }
-	void ReverseSolution(bool reverse_solution)
-	{
-		reverse_solution_ = reverse_solution;
-	}
+	void ReverseSolution(bool reverse_solution) {reverse_solution_ = reverse_solution;}
 };
 
 }

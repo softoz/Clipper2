@@ -2,8 +2,8 @@ unit Clipper.Core;
 
 (*******************************************************************************
 * Author    :  Angus Johnson                                                   *
-* Version   :  10.0 (beta) - aka Clipper2                                      *
-* Date      :  9 June 2022                                                     *
+* Version   :  Clipper2 - beta                                                 *
+* Date      :  20 June 2022                                                    *
 * Copyright :  Angus Johnson 2010-2022                                         *
 * Purpose   :  Core Clipper Library module                                     *
 *              Contains structures and functions used throughout the library   *
@@ -16,6 +16,25 @@ interface
 
 uses
   SysUtils, Math;
+
+//The classic Cartesian plane is defined by an X-axis that's positive toward
+//the right and a Y-axis that's positive upwards. However, many modern
+//graphics libraries use an inverted Y-axis (where Y is positive downward).
+//This effectively flips polygons upside down, with winding directions that
+//were clockwise becoming anti-clockwise, and areas that were positive
+//becoming negative. Nevertheless, in Cartesian coordinates the area of a
+//convex polygon is defined to be positive if the points are arranged in a
+//counterclockwise order, and negative if they are in clockwise order
+//(see https://mathworld.wolfram.com/PolygonArea.html). If this "normal"
+//winding direction is inconvenient for whatever reason the following
+//constant can be changed to accommodate this. Note however that winding
+//direction is only important when using Clipper's Positive and Negative
+//filling rules. (Reversing orientation has no effect on NonZero an EvenOdd
+//filling.) The constant below is intended as "set and perhaps not quite
+//forget". While this sets the default orientation, the Clipper class
+//constructor contains a parameter which can override this default setting.
+
+const DEFAULT_ORIENTATION_IS_REVERSED = false;
 
 type
   PPoint64  = ^TPoint64;
@@ -63,14 +82,17 @@ type
     function GetWidth: Int64; {$IFDEF INLINING} inline; {$ENDIF}
     function GetHeight: Int64; {$IFDEF INLINING} inline; {$ENDIF}
     function GetIsEmpty: Boolean; {$IFDEF INLINING} inline; {$ENDIF}
+    function GetMidPoint: TPoint64; {$IFDEF INLINING} inline; {$ENDIF}
   public
     Left   : Int64;
     Top    : Int64;
     Right  : Int64;
     Bottom : Int64;
+    function PtInside(const pt: TPoint64): Boolean;
     property Width: Int64 read GetWidth;
     property Height: Int64 read GetHeight;
     property IsEmpty: Boolean read GetIsEmpty;
+    property MidPoint: TPoint64 read GetMidPoint;
   end;
 
   TRectD = {$ifdef RECORD_METHODS}record{$else}object{$endif}
@@ -78,14 +100,17 @@ type
     function GetWidth: double; {$IFDEF INLINING} inline; {$ENDIF}
     function GetHeight: double; {$IFDEF INLINING} inline; {$ENDIF}
     function GetIsEmpty: Boolean; {$IFDEF INLINING} inline; {$ENDIF}
+    function GetMidPoint: TPointD; {$IFDEF INLINING} inline; {$ENDIF}
   public
     Left   : double;
     Top    : double;
     Right  : double;
     Bottom : double;
+    function PtInside(const pt: TPointD): Boolean;
     property Width: double read GetWidth;
     property Height: double read GetHeight;
     property IsEmpty: Boolean read GetIsEmpty;
+    property MidPoint: TPointD read GetMidPoint;
   end;
 
   TClipType = (ctNone, ctIntersection, ctUnion, ctDifference, ctXor);
@@ -94,15 +119,21 @@ type
 
   EClipperLibException = class(Exception);
 
-function Area(const path: TPath64): Double; overload;
-function Area(const paths: TPaths64): Double; overload;
+function Area(const path: TPath64;
+  orientationIsReversed: Boolean = DEFAULT_ORIENTATION_IS_REVERSED): Double; overload;
+function Area(const paths: TPaths64;
+  orientationIsReversed: Boolean = DEFAULT_ORIENTATION_IS_REVERSED): Double; overload;
   {$IFDEF INLINING} inline; {$ENDIF}
-function Area(const path: TPathD): Double; overload;
-function Area(const paths: TPathsD): Double; overload;
+function Area(const path: TPathD;
+  orientationIsReversed: Boolean = DEFAULT_ORIENTATION_IS_REVERSED): Double; overload;
+function Area(const paths: TPathsD;
+  orientationIsReversed: Boolean = DEFAULT_ORIENTATION_IS_REVERSED): Double; overload;
   {$IFDEF INLINING} inline; {$ENDIF}
-function IsPositive(const path: TPath64): Boolean; overload;
+function IsPositive(const path: TPath64;
+  orientationIsReversed: Boolean = DEFAULT_ORIENTATION_IS_REVERSED): Boolean; overload;
   {$IFDEF INLINING} inline; {$ENDIF}
-function IsPositive(const path: TPathD): Boolean; overload;
+function IsPositive(const path: TPathD;
+  orientationIsReversed: Boolean = DEFAULT_ORIENTATION_IS_REVERSED): Boolean; overload;
   {$IFDEF INLINING} inline; {$ENDIF}
 
 function CrossProduct(const pt1, pt2, pt3: TPoint64): double; overload;
@@ -242,6 +273,10 @@ function GetIntersectPoint(const ln1a, ln1b, ln2a, ln2b: TPoint64): TPointD;
 function RamerDouglasPeucker(const path: TPath64; epsilon: double): TPath64; overload;
 function RamerDouglasPeucker(const paths: TPaths64; epsilon: double): TPaths64; overload;
 
+procedure GetSinCos(angle: double; out sinA, cosA: double);
+function Ellipse(const rec: TRect64; steps: integer = 0): TPath64; overload;
+function Ellipse(const rec: TRectD; steps: integer = 0): TPathD; overload;
+
 const
   MaxInt64    = 9223372036854775807;
   NullRect64  : TRect64 = (left: 0; top: 0; right: 0; Bottom: 0);
@@ -270,6 +305,19 @@ function TRect64.GetIsEmpty: Boolean;
 begin
   result := (bottom <= top) or (right <= left);
 end;
+//------------------------------------------------------------------------------
+
+function TRect64.GetMidPoint: TPoint64;
+begin
+  result := Point64((Left + Right) div 2, (Top + Bottom) div 2);
+end;
+//------------------------------------------------------------------------------
+
+function TRect64.PtInside(const pt: TPoint64): Boolean;
+begin
+  result := (pt.X > Left) and (pt.X < Right) and
+    (pt.Y > Top) and (pt.Y < Bottom);
+end;
 
 //------------------------------------------------------------------------------
 // TRectD methods ...
@@ -290,6 +338,19 @@ end;
 function TRectD.GetIsEmpty: Boolean;
 begin
   result := (bottom <= top) or (right <= left);
+end;
+//------------------------------------------------------------------------------
+
+function TRectD.GetMidPoint: TPointD;
+begin
+  result := PointD((Left + Right) *0.5, (Top + Bottom) *0.5);
+end;
+//------------------------------------------------------------------------------
+
+function TRectD.PtInside(const pt: TPointD): Boolean;
+begin
+  result := (pt.X > Left) and (pt.X < Right) and
+    (pt.Y > Top) and (pt.Y < Bottom);
 end;
 
 //------------------------------------------------------------------------------
@@ -1244,7 +1305,7 @@ begin
 end;
 //------------------------------------------------------------------------------
 
-function Area(const path: TPath64): Double;
+function Area(const path: TPath64; orientationIsReversed: Boolean): Double;
 var
   i, highI: Integer;
   d: double;
@@ -1262,25 +1323,23 @@ begin
     Result := Result + d * (p1.X - p2.X);
     p1 := p2; inc(p2);
   end;
-{$IFDEF REVERSE_ORIENTATION}
-  Result := Result * 0.5;
-{$ELSE}
-  Result := Result * -0.5;
-{$ENDIF}
+  if orientationIsReversed then
+    Result := Result * -0.5 else
+    Result := Result * 0.5;
 end;
 //------------------------------------------------------------------------------
 
-function Area(const paths: TPaths64): Double;
+function Area(const paths: TPaths64; orientationIsReversed: Boolean): Double;
 var
   i: integer;
 begin
   Result := 0;
   for i := 0 to High(paths) do
-    Result := Result + Area(paths[i]);
+    Result := Result + Area(paths[i], orientationIsReversed);
 end;
 //------------------------------------------------------------------------------
 
-function Area(const path: TPathD): Double;
+function Area(const path: TPathD; orientationIsReversed: Boolean): Double;
 var
   i, highI: Integer;
   p1,p2: PPointD;
@@ -1296,33 +1355,31 @@ begin
     Result := Result + (p1.Y + p2.Y) * (p1.X - p2.X);
     p1 := p2; inc(p2);
   end;
-{$IFDEF REVERSE_ORIENTATION}
-  Result := Result * 0.5;
-{$ELSE}
-  Result := Result * -0.5;
-{$ENDIF}
+  if orientationIsReversed then
+    Result := Result * -0.5 else
+    Result := Result * 0.5;
 end;
 //------------------------------------------------------------------------------
 
-function Area(const paths: TPathsD): Double;
+function Area(const paths: TPathsD; orientationIsReversed: Boolean): Double;
 var
   i: integer;
 begin
   Result := 0;
   for i := 0 to High(paths) do
-    Result := Result + Area(paths[i]);
+    Result := Result + Area(paths[i], orientationIsReversed);
 end;
 //------------------------------------------------------------------------------
 
-function IsPositive(const path: TPath64): Boolean;
+function IsPositive(const path: TPath64; orientationIsReversed: Boolean): Boolean;
 begin
-  Result := (Area(path) >= 0);
+  Result := (Area(path, orientationIsReversed) >= 0);
 end;
 //------------------------------------------------------------------------------
 
-function IsPositive(const path: TPathD): Boolean;
+function IsPositive(const path: TPathD; orientationIsReversed: Boolean): Boolean;
 begin
-  Result := (Area(path) >= 0);
+  Result := (Area(path, orientationIsReversed) >= 0);
 end;
 //------------------------------------------------------------------------------
 
@@ -1477,6 +1534,56 @@ begin
 end;
 //------------------------------------------------------------------------------
 
+procedure GetSinCos(angle: double; out sinA, cosA: double);
+  {$IFDEF INLINE} inline; {$ENDIF}
+{$IFNDEF FPC}
+var s, c: extended;
+{$ENDIF}
+begin
+{$IFDEF FPC}
+  Math.SinCos(angle, sinA, cosA);
+{$ELSE}
+  Math.SinCos(angle, s, c);
+  sinA := s; cosA := c;
+{$ENDIF}
+end;
+//------------------------------------------------------------------------------
+
+function Ellipse(const rec: TRect64; steps: integer): TPath64;
+begin
+  Result := Path64(Ellipse(RectD(rec), steps));
+end;
+//------------------------------------------------------------------------------
+
+function Ellipse(const rec: TRectD; steps: integer): TPathD;
+var
+  i: Integer;
+  sinA, cosA: double;
+  centre, radius, delta: TPointD;
+begin
+  result := nil;
+  if rec.IsEmpty then Exit;
+  with rec do
+  begin
+    centre := rec.MidPoint;
+    radius := PointD(Width * 0.5, Height  * 0.5);
+  end;
+  if (steps < 3) then
+    steps := Ceil(PI * sqrt(rec.width + rec.height));
+  GetSinCos(2 * Pi / Steps, sinA, cosA);
+  delta.x := cosA; delta.y := sinA;
+  SetLength(Result, Steps);
+  Result[0] := PointD(centre.X + radius.X, centre.Y);
+  for i := 1 to steps -1 do
+  begin
+    Result[i] := PointD(centre.X + radius.X * delta.x,
+      centre.Y + radius.y * delta.y);
+    delta :=  PointD(delta.X * cosA - delta.Y * sinA,
+      delta.Y * cosA + delta.X * sinA);
+  end; //rotates clockwise
+end;
+//------------------------------------------------------------------------------
+
 function PerpendicDistFromLineSqrd(const pt, line1, line2: TPoint64): double;
 var
   a,b,c,d: double;
@@ -1558,5 +1665,6 @@ begin
     Result[i] := RamerDouglasPeucker(paths[i], epsilon);
 end;
 //------------------------------------------------------------------------------
+
 end.
 
