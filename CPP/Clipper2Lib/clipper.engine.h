@@ -1,7 +1,7 @@
 /*******************************************************************************
 * Author    :  Angus Johnson                                                   *
-* Version   :  Clipper2 - beta                                                 *
-* Date      :  14 July 2022                                                    *
+* Version   :  Clipper2 - ver.1.0.0                                            *
+* Date      :  3 August 2022                                                   *
 * Website   :  http://www.angusj.com                                           *
 * Copyright :  Angus Johnson 2010-2022                                         *
 * Purpose   :  This is the main polygon clipping module                        *
@@ -32,8 +32,6 @@ namespace Clipper2Lib {
 	//Note: all clipping operations except for Difference are commutative.
 	enum class ClipType { None, Intersection, Union, Difference, Xor };
 	
-	enum class PointInPolygonResult { IsOn, IsInside, IsOutside };
-
 	enum class PathType { Subject, Clip };
 
 	//By far the most widely used filling rules for polygons are EvenOdd
@@ -99,6 +97,8 @@ namespace Clipper2Lib {
 		Active* back_edge = nullptr;
 		OutPt* pts = nullptr;
 		PolyPath64* polypath = nullptr;
+		Rect64 bounds = {};
+		Path64 path;
 		bool is_open = false;
 		~OutRec() { if (splits) delete splits; };
 	};
@@ -227,7 +227,7 @@ namespace Clipper2Lib {
 		OutPt* DoSplitOp(OutPt* outRecOp, OutPt* splitOp);
 		Joiner* GetHorzTrialParent(const OutPt* op);
 		bool OutPtInTrialHorzList(OutPt* op);
-		void SafeDisposeOutPts(OutPt* op);
+		void SafeDisposeOutPts(OutPt*& op);
 		void SafeDeleteOutPtJoiners(OutPt* op);
 		void AddTrialHorzJoin(OutPt* op);
 		void DeleteTrialHorzJoin(OutPt* op);
@@ -237,6 +237,7 @@ namespace Clipper2Lib {
 		void ProcessJoinerList();
 		OutRec* ProcessJoin(Joiner* joiner);
 		bool ExecuteInternal(ClipType ct, FillRule ft, bool use_polytrees);
+		bool DeepCheckOwner(OutRec* outrec, OutRec* owner);
 		void BuildPaths(Paths64& solutionClosed, Paths64* solutionOpen);
 		void BuildTree(PolyPath64& polytree, Paths64& open_paths);
 #ifdef USINGZ
@@ -252,6 +253,7 @@ namespace Clipper2Lib {
 			FillRule fill_rule, Paths64& solution_closed);
 		bool Execute(ClipType clip_type,
 			FillRule fill_rule, Paths64& solution_closed, Paths64& solution_open);
+		bool Execute(ClipType clip_type, FillRule fill_rule, PolyTree64& polytree);
 		bool Execute(ClipType clip_type,
 			FillRule fill_rule, PolyTree64& polytree, Paths64& open_paths);
 	public:
@@ -296,6 +298,11 @@ namespace Clipper2Lib {
 		PolyPath(const PolyPath&) = delete;
 		PolyPath& operator=(const PolyPath&) = delete;
 
+		PolyPath<T>* operator [] (size_t index) { return childs_[index]; }
+
+		typename std::vector<PolyPath*>::const_iterator begin() const { return childs_.cbegin(); }
+		typename std::vector<PolyPath*>::const_iterator end() const { return childs_.cend(); }
+
 		void Clear() { 
 			for (PolyPath<T>* child : childs_) delete child;
 			childs_.resize(0); 
@@ -312,9 +319,7 @@ namespace Clipper2Lib {
 			return childs_.back();
 		}
 
-		size_t ChildCount() const { return childs_.size(); }
-
-		const PolyPath<T>* operator [] (size_t index) const { return childs_[index]; }
+		size_t Count() const { return childs_.size(); }
 
 		const PolyPath<T>* parent() const { return parent_; }
 
@@ -329,9 +334,9 @@ namespace Clipper2Lib {
 			return is_hole;
 		}
 
-		const Path<T>& polygon() const { return polygon_; }
+		const Path<T>& Polygon() const { return polygon_; }
 
-		const std::vector<PolyPath*>& childs() const { return childs_; }
+		//const std::vector<PolyPath*>& Child() const { return childs_; }
 
 		double Area() const
 		{
@@ -377,6 +382,10 @@ namespace Clipper2Lib {
 			return ClipperBase::Execute(clip_type, fill_rule, closed_paths, open_paths);
 		}
 
+		bool Execute(ClipType clip_type, FillRule fill_rule, PolyTree64& polytree)
+		{
+			return ClipperBase::Execute(clip_type, fill_rule, polytree);
+		}
 		bool Execute(ClipType clip_type,
 			FillRule fill_rule, PolyTree64& polytree, Paths64& open_paths)
 		{
@@ -426,6 +435,14 @@ namespace Clipper2Lib {
 				fill_rule, closed_paths64, open_paths64)) return false;
 			closed_paths = ScalePaths<double, int64_t>(closed_paths64, 1 / scale_);
 			open_paths = ScalePaths<double, int64_t>(open_paths64, 1 / scale_);
+			return true;
+		}
+
+		bool Execute(ClipType clip_type, FillRule fill_rule, PolyTreeD& polytree)
+		{
+			PolyTree64 tree_result;
+			if (!ClipperBase::Execute(clip_type, fill_rule, tree_result)) return false;;
+			Polytree64ToPolytreeD(tree_result, polytree);
 			return true;
 		}
 
