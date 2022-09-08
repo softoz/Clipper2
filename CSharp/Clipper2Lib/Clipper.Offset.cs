@@ -1,7 +1,7 @@
 ﻿/*******************************************************************************
 * Author    :  Angus Johnson                                                   *
-* Version   :  Clipper2 - ver.1.0.3                                            *
-* Date      :  20 August 2022                                                  *
+* Version   :  Clipper2 - ver.1.0.4                                            *
+* Date      :  7 September 2022                                                *
 * Website   :  http://www.angusj.com                                           *
 * Copyright :  Angus Johnson 2010-2022                                         *
 * Purpose   :  Path Offset (Inflate/Shrink)                                    *
@@ -164,6 +164,7 @@ namespace Clipper2Lib
       return new PointD(dy, -dx);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private int GetLowestPolygonIdx(Paths64 paths)
     {
       Point64 lp = new Point64(0, long.MinValue);
@@ -174,7 +175,7 @@ namespace Clipper2Lib
         for (int j = 0; j < p.Count; j++)
         {
           if (p[j].Y < lp.Y) continue;
-          else if (p[j].Y > lp.Y || p[j].X < lp.X)
+          if (p[j].Y > lp.Y || p[j].X < lp.X)
           {
             result = i;
             lp = p[j];
@@ -224,20 +225,22 @@ namespace Clipper2Lib
 	    return NormalizeVector(new PointD(vec1.x + vec2.x, vec1.y + vec2.y));
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private PointD IntersectPoint(PointD pt1a, PointD pt1b, PointD pt2a, PointD pt2b)
     {
-      if (pt1a.x == pt1b.x) //vertical
+      if (InternalClipper.IsAlmostZero(pt1a.x - pt1b.x)) //vertical
       {
-        if (pt2a.x == pt2b.x) return new PointD(0, 0);
+        if (InternalClipper.IsAlmostZero(pt2a.x - pt2b.x)) return new PointD(0, 0);
         double m2 = (pt2b.y - pt2a.y) / (pt2b.x - pt2a.x);
         double b2 = pt2a.y - m2 * pt2a.x;
         return new PointD(pt1a.x, m2* pt1a.x + b2);
       }
-      else if (pt2a.x == pt2b.x) //vertical
+
+      if (InternalClipper.IsAlmostZero(pt2a.x - pt2b.x)) //vertical
       {
         double m1 = (pt1b.y - pt1a.y) / (pt1b.x - pt1a.x);
         double b1 = pt1a.y - m1 * pt1a.x;
-          return new PointD(pt2a.x, m1* pt2a.x + b1);
+        return new PointD(pt2a.x, m1* pt2a.x + b1);
       }
       else
       {
@@ -245,7 +248,7 @@ namespace Clipper2Lib
         double b1 = pt1a.y - m1 * pt1a.x;
         double m2 = (pt2b.y - pt2a.y) / (pt2b.x - pt2a.x);
         double b2 = pt2a.y - m2 * pt2a.x;
-        if (m1 == m2) return new PointD(0, 0);
+        if (InternalClipper.IsAlmostZero(m1 - m2)) return new PointD(0, 0);
         double x = (b2 - b1) / (m1 - m2);
         return new PointD(x, m1 * x + b1);
       }
@@ -294,6 +297,7 @@ namespace Clipper2Lib
           path[j].Y + (_normals[k].y + _normals[j].y) * q));
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void DoRound(PathGroup group, Point64 pt, PointD normal1, PointD normal2, double angle)
     {
       // even though angle may be negative this is a convex join
@@ -312,6 +316,7 @@ namespace Clipper2Lib
         new Point64(pt.X + normal1.x * _delta, pt.Y + normal1.y * _delta));
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void BuildNormals(Path64 path)
     {
       int cnt = path.Count;
@@ -325,16 +330,18 @@ namespace Clipper2Lib
 
     private void OffsetPoint(PathGroup group, Path64 path, int j, ref int k)
     {
-      // A: angle between adjoining edges (on left side WRT winding direction).
-      // A == 0 deg (or A == 360 deg): collinear edges heading in same direction
-      // A == 180 deg: collinear edges heading in opposite directions (i.e. a 'spike')
-      // sin(A) < 0: convex on left.
-      // cos(A) > 0: angles on both left and right sides > 90 degrees
-      double sinA = _normals[k].x * _normals[j].y - _normals[j].x * _normals[k].y;
+      // Let A = change in angle where edges join
+      // A == 0: ie no change in angle (flat join)
+      // A == PI: edges 'spike'
+      // sin(A) < 0: right turning
+      // cos(A) < 0: change in angle is more than 90 degree
+      double sinA = InternalClipper.CrossProduct(_normals[j], _normals[k]);
+      double cosA = InternalClipper.DotProduct(_normals[j], _normals[k]);
       if (sinA > 1.0) sinA = 1.0;
       else if (sinA < -1.0) sinA = -1.0;
 
-      if (sinA * _delta < 0) // a concave offset
+      bool almostNoAngle = (AlmostZero(sinA) && cosA > 0); 
+      if (almostNoAngle || (sinA * _delta < 0))
       {
         Point64 p1 = new Point64(
             path[j].X + _normals[k].x * _delta,
@@ -345,32 +352,30 @@ namespace Clipper2Lib
         group._outPath.Add(p1);
         if (p1 != p2)
         {
-          group._outPath.Add(path[j]); // this aids with clipping removal later
+          // when concave add an extra vertex to ensure neat clipping
+          if (!almostNoAngle) group._outPath.Add(path[j]); 
           group._outPath.Add(p2);
         }
       }
-      else
+      else //convex
       {
-        double cosA = InternalClipper.DotProduct(_normals[j], _normals[k]);
-        switch (_joinType)
-        {
-          case JoinType.Miter:
-            if (1 + cosA < _tmpLimit) DoSquare(group, path, j, k);
-            else DoMiter(group, path, j, k, cosA);
-            break;
-          case JoinType.Square:
-            if (cosA >= 0) DoMiter(group, path, j, k, cosA);
-            else DoSquare(group, path, j, k);
-            break;
-          default:
-            DoRound(group, path[j], _normals[j], _normals[k], Math.Atan2(sinA, cosA));
-            break;
-        }
+        if (_joinType == JoinType.Round)
+          DoRound(group, path[j], _normals[j], _normals[k], Math.Atan2(sinA, cosA));
+        // else miter when the angle isn't too acute (and hence exceed ML)
+        else if (_joinType == JoinType.Miter && cosA > _tmpLimit - 1)
+          DoMiter(group, path, j, k, cosA);
+        // else only square angles that deviate > 90 degrees
+        else if (cosA < -0.001)
+          DoSquare(group, path, j, k);
+        else
+          // don't square shallow angles that are safe to miter
+          DoMiter(group, path, j, k, cosA);
       }
 
       k = j;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void OffsetPolygon(PathGroup group, Path64 path)
     {
       group._outPath = new Path64();
@@ -380,6 +385,7 @@ namespace Clipper2Lib
       group._outPaths.Add(group._outPath);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void OffsetOpenJoined(PathGroup group, Path64 path)
     {
       OffsetPolygon(group, path);
@@ -447,6 +453,7 @@ namespace Clipper2Lib
       group._outPaths.Add(group._outPath);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private bool IsFullyOpenEndType(EndType et)
     {
       return (et != EndType.Polygon) && (et != EndType.Joined);

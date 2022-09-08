@@ -1,7 +1,7 @@
 /*******************************************************************************
 * Author    :  Angus Johnson                                                   *
-* Version   :  Clipper2 - ver.1.0.3                                            *
-* Date      :  26 August 2022                                                  *
+* Version   :  Clipper2 - ver.1.0.4                                            *
+* Date      :  7 August 2022                                                   *
 * Website   :  http://www.angusj.com                                           *
 * Copyright :  Angus Johnson 2010-2022                                         *
 * Purpose   :  Core Clipper Library structures and functions                   *
@@ -59,7 +59,7 @@ struct Point {
 	explicit Point() : x(0), y(0), z(0) {};
 
 	template <typename T2>
-	explicit Point(const T2 x_= 0, const T2 y_ = 0, const int64_t z_ = 0)
+	Point(const T2 x_, const T2 y_, const int64_t z_ = 0)
 	{
 		Init(x_, y_);
 		z = z_;
@@ -89,7 +89,7 @@ struct Point {
 	explicit Point() : x(0), y(0) {};
 
 	template <typename T2>
-	explicit Point(const T2 x_ = 0, const T2 y_ = 0) { Init(x_, y_); }
+	Point(const T2 x_, const T2 y_) { Init(x_, y_); }
 
 	template <typename T2>
 	explicit Point<T>(const Point<T2>& p) { Init(p.x, p.y); }
@@ -403,6 +403,12 @@ template <typename T>
 inline double CrossProduct(const Point<T>& pt1, const Point<T>& pt2, const Point<T>& pt3) {
 	return (static_cast<double>(pt2.x - pt1.x) * static_cast<double>(pt3.y - 
 		pt2.y) - static_cast<double>(pt2.y - pt1.y) * static_cast<double>(pt3.x - pt2.x));
+}
+
+template <typename T>
+inline double CrossProduct(const Point<T>& vec1, const Point<T>& vec2)
+{
+	return static_cast<double>(vec1.y * vec2.x) - static_cast<double>(vec2.y * vec1.x);
 }
 
 template <typename T>

@@ -10,6 +10,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 
 namespace Clipper2Lib
 {
@@ -154,8 +155,7 @@ namespace Clipper2Lib
     {
       if (obj is Point64 p)
         return this == p;
-      else
-        return false;
+      return false;
     }
 
     public override int GetHashCode() { return 0; }
@@ -259,28 +259,23 @@ namespace Clipper2Lib
     }
 
 #endif
-
-    private static bool IsAlmostZero(double value)
-    {
-      return (Math.Abs(value) <= 1E-15);
-    }
-
     public static bool operator ==(PointD lhs, PointD rhs)
     {
-      return IsAlmostZero(lhs.x - rhs.x) && IsAlmostZero(lhs.y - rhs.y);
+      return InternalClipper.IsAlmostZero(lhs.x - rhs.x) && 
+        InternalClipper.IsAlmostZero(lhs.y - rhs.y);
     }
 
     public static bool operator !=(PointD lhs, PointD rhs)
     {
-      return !IsAlmostZero(lhs.x - rhs.x) || !IsAlmostZero(lhs.y - rhs.y);
+      return !InternalClipper.IsAlmostZero(lhs.x - rhs.x) || 
+        !InternalClipper.IsAlmostZero(lhs.y - rhs.y);
     }
 
     public override bool Equals(object obj)
     {
       if (obj is PointD p)
         return this == p;
-      else
-        return false;
+      return false;
     }
 
     public override int GetHashCode() { return 0; }
@@ -437,9 +432,15 @@ namespace Clipper2Lib
   public static class InternalClipper
   {
 
-    internal const double floatingPointTolerance = 1E-15;
+    internal const double floatingPointTolerance = 1E-12;
     internal const double defaultMinimumEdgeLength = 0.1;
 
+    internal static bool IsAlmostZero(double value)
+    {
+      return (Math.Abs(value) <= floatingPointTolerance);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static double CrossProduct(Point64 pt1, Point64 pt2, Point64 pt3)
     {
       // typecast to double to avoid potential int overflow
@@ -447,6 +448,7 @@ namespace Clipper2Lib
               (double) (pt2.Y - pt1.Y) * (pt3.X - pt2.X));
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static double DotProduct(Point64 pt1, Point64 pt2, Point64 pt3)
     {
       // typecast to double to avoid potential int overflow
@@ -454,6 +456,13 @@ namespace Clipper2Lib
               (double) (pt2.Y - pt1.Y) * (pt3.Y - pt2.Y));
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static double CrossProduct(PointD vec1, PointD vec2)
+    {
+      return (vec1.y * vec2.x - vec2.y * vec1.x);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static double DotProduct(PointD vec1, PointD vec2)
     {
       return (vec1.x * vec2.x + vec1.y * vec2.y);
@@ -541,9 +550,9 @@ namespace Clipper2Lib
           if (i == len) break;
         }
 
-        Point64 curr, prev;
+        Point64 prev;
 
-        curr = polygon[i];
+        Point64 curr = polygon[i];
         if (i > 0) prev = polygon[i - 1];
         else prev = polygon[len - 1];
 
@@ -566,7 +575,7 @@ namespace Clipper2Lib
         }
         else
         {
-          double d = InternalClipper.CrossProduct(prev, curr, pt);
+          double d = CrossProduct(prev, curr, pt);
           if (d == 0) return PointInPolygonResult.IsOn;
           if ((d < 0) == isAbove) val = 1 - val;
         }
@@ -575,8 +584,7 @@ namespace Clipper2Lib
       }
       if (val == 0)
         return PointInPolygonResult.IsOutside;
-      else
-        return PointInPolygonResult.IsInside;
+      return PointInPolygonResult.IsInside;
     }
 
   } // InternalClipper
