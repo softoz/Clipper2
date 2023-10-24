@@ -1,12 +1,11 @@
 ﻿/*******************************************************************************
 * Author    :  Angus Johnson                                                   *
-* Date      :  16 September 2022                                               *
+* Date      :  24 September 2023                                               *
 * Website   :  http://www.angusj.com                                           *
-* Copyright :  Angus Johnson 2010-2022                                         *
+* Copyright :  Angus Johnson 2010-2023                                         *
 * License   :  http://www.boost.org/LICENSE_1_0.txt                            *
 *******************************************************************************/
 
-using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using Clipper2Lib;
@@ -21,40 +20,53 @@ namespace ClipperDemo1
     {
       DoSimpleShapes();
       DoRabbit();
+      DoVariableOffset();
     }
 
     public static void DoSimpleShapes()
     {
       //triangle offset - with large miter
       Paths64 p = new() { Clipper.MakePath(new int[] { 30, 150, 60, 350, 0, 350 }) };
-      Paths64 pp = new ();
+      Paths64 pp = new();
       pp.AddRange(p);
 
       for (int i = 0; i < 5; ++i)
       {
-        //nb: the following '10' parameter greatly increases miter limit
+        //nb: the last parameter here (10) greatly increases miter limit
         p = Clipper.InflatePaths(p, 5, JoinType.Miter, EndType.Polygon, 10);
         pp.AddRange(p);
       }
 
       //rectangle offset - both squared and rounded
       p.Clear();
-      p.Add(Clipper.MakePath(new int[] { 100, 0, 340, 0, 340, 200, 100, 200 }));
-      pp.AddRange(p);
+      ClipperOffset co = new();
+
       //nb: using the ClipperOffest class directly here to control 
       //different join types within the same offset operation
-      ClipperOffset co = new ();
-      co.AddPaths(p, JoinType.Miter, EndType.Joined);
-      p = Clipper.TranslatePaths(p, 120, 100);
+      p.Add(Clipper.MakePath(new int[] { 100, 0, 340, 0, 340, 200, 100, 200 }));
+      pp.AddRange(p);
+      co.AddPaths(p, JoinType.Bevel, EndType.Joined);
+
+      p = Clipper.TranslatePaths(p, 60, 50);
+      pp.AddRange(p);
+      co.AddPaths(p, JoinType.Square, EndType.Joined);
+
+      p = Clipper.TranslatePaths(p, 60, 50);
       pp.AddRange(p);
       co.AddPaths(p, JoinType.Round, EndType.Joined);
-      p = co.Execute(20);
+
+
+      co.Execute(20, p);
       pp.AddRange(p);
 
-      SimpleSvgWriter svg = new ();
+      string filename = "../../../inflate.svg";
+      SvgWriter svg = new();
       SvgUtils.AddSolution(svg, pp, false);
-      SvgUtils.SaveToFile(svg, "../../../inflate.svg", FillRule.EvenOdd, 800, 600, 20);
-      ClipperFileIO.OpenFileWithDefaultApp("../../../inflate.svg");
+      SvgUtils.AddCaption(svg, "Beveled join", 100, -27);
+      SvgUtils.AddCaption(svg, "Squared join", 160, 23);
+      SvgUtils.AddCaption(svg, "Rounded join", 220, 73);
+      SvgUtils.SaveToFile(svg, filename, FillRule.EvenOdd, 800, 600, 20);
+      ClipperFileIO.OpenFileWithDefaultApp(filename);
     }
 
     public static void DoRabbit()
@@ -64,18 +76,19 @@ namespace ClipperDemo1
       PathsD solution = new (pd);
       while (pd.Count > 0)
       {
-        //don't forget to scale the delta offset
+        // and don't forget to scale the delta offset
         pd = Clipper.InflatePaths(pd, -2.5, JoinType.Round, EndType.Polygon);
-        //RamerDouglasPeucker - not essential but not only 
-        //speeds up the loop but also tidies the result
-        pd = Clipper.RamerDouglasPeucker(pd, 0.025);
+        // SimplifyPaths - is not essential but it not only 
+        // speeds up the loop but it also tidies the result
+        pd = Clipper.SimplifyPaths(pd, 0.25);
         solution.AddRange(pd);
       }
 
-      SimpleSvgWriter svg = new ();
+      string filename = "../../../rabbit.svg";
+      SvgWriter svg = new ();
       SvgUtils.AddSolution(svg, solution, false);
-      SvgUtils.SaveToFile(svg, "../../../rabbit2.svg", FillRule.EvenOdd, 450, 720, 10);
-      ClipperFileIO.OpenFileWithDefaultApp("../../../rabbit2.svg");
+      SvgUtils.SaveToFile(svg, filename, FillRule.EvenOdd, 450, 720, 10);
+      ClipperFileIO.OpenFileWithDefaultApp(filename);
     }
 
     public static PathsD LoadPathsFromResource(string resourceName)
@@ -100,7 +113,25 @@ namespace ClipperDemo1
       }
       return result;
     }
-  
+
+    public static void DoVariableOffset()
+    {
+      Paths64 p = new() { Clipper.MakePath(new int[] { 0,50, 20,50, 40,50, 60,50, 80,50, 100,50 }) };
+      Paths64 solution = new();
+      ClipperOffset co = new();
+      co.AddPaths(p, JoinType.Square, EndType.Butt);
+      co.Execute(
+        delegate (Path64 path, PathD path_norms, int currPt, int prevPt) 
+        { return currPt* currPt + 10; } , solution);
+
+      string filename = "../../../variable_offset.svg";
+      SvgWriter svg = new();
+      SvgUtils.AddOpenSubject(svg, p);
+      SvgUtils.AddSolution(svg, solution, true);
+      SvgUtils.SaveToFile(svg, filename, FillRule.EvenOdd, 500, 500, 60);
+      ClipperFileIO.OpenFileWithDefaultApp(filename);
+    }
+
   } //end Application
 
 } //namespace
